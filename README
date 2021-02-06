@@ -1,0 +1,28 @@
+fixmszip is a program to fix large (>4GB) zip files created on Microsoft
+Windows so that Mac/Unix zip tools work with them.
+
+If a Windows user right clicks a large file or folder and selects
+"Send to compressed (zipped) folder", if the resulting file is >4GB it
+is not usable by unzip/zipinfo on unix and linux platforms or the Mac
+archive utility. Analysis of problematic zip files reveals that this is
+because Windows does not set the "Total Number of Disks" field in theZip64
+"End of Central Directory Locator" (EOCDL).
+
+This utility:
+    * Checks that a file appears to be a valid zip file
+    * Checks that it is large enough to require a Zip64 EOCDL
+    * Checks that the EOCDL looks valid and contins a zero "Total Number
+      of Disks" field
+    * Sets the "Total Number of Disks" field to 1
+
+Building
+--------
+make fixmszip
+
+Invocation
+----------
+fixmszip [-nv] <zipfile> [...]
+Options:
+-v: Verbose output
+-n: Report on what fixmszip would do without changing any target files
+
