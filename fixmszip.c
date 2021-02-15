@@ -20,6 +20,7 @@
 #define Z64_EOCDL_SIZE 20           /* Zip64 EOCD Locator */
 #define Z64_EOCDL_SIG 0x07064b50    /* Zip64 EOCDL signature */
 #define SIG_LEN 4                   /* Zip64 signature length */
+#define ERRMAX 1024                 /* Maximum error message size */
 
 static char *progname = "fixmszip";
 static int little_endian;           /* This system's endianness. 1 == litle */
@@ -27,7 +28,7 @@ static int little_endian;           /* This system's endianness. 1 == litle */
 /* Print usage an exit */
 void usage()
 {
-    fprintf(stderr,"Usage: %s [-v] zipfile [...]\n",progname);
+    fprintf(stderr,"Usage: %s [-vn] zipfile [...]\n",progname);
     exit(1);
 }
 
@@ -84,7 +85,7 @@ unsigned int get4bytes(const unsigned char *ptr)
                     0: file doesn't need updating
                     1: file updated (or would have been if not dryrun)
 */
-int fixup(char *filename, int dryrun)
+int fixup(char *filename, char **err, int dryrun)
 {
     int fd,i,res=0,pagesize;
     unsigned char *fptr,*ptr,*minptr;
@@ -93,16 +94,21 @@ int fixup(char *filename, int dryrun)
     unsigned cd_offset,z64sig,numdisks;
     unsigned short comment_len,this_disk,start_disk;
     const unsigned char sig[] = {0x50,0x4b,0x05,0x06};
+    static char errbuf[ERRMAX];
+
+    *errbuf = '\0';
+    *err = errbuf;
 
     if (lstat(filename,&sbuf)) {
-        fprintf(stderr,"Failed to stat %s: %s\n",filename,strerror(errno));
+        snprintf(errbuf,ERRMAX,"Failed to stat %s: %s",
+                filename,strerror(errno));
         return(-1);
     }
 
     /* If file is smaller than End of Central Directory Record, it can't be
        a zip file (TODO: check for smallest viable zip file */
     if ((fsize = sbuf.st_size) < EOCDR_BASE_SIZE) {
-        fprintf(stderr,"%s is not a zip file\n",filename);
+        snprintf(errbuf,ERRMAX,"%s is not a zip file\n",filename);
         return(-1);
     }
 
@@ -121,14 +127,16 @@ int fixup(char *filename, int dryrun)
     }
 
     if ((fd = open(filename,O_RDWR)) < 0) {
-        fprintf(stderr,"Failed to open %s: %s\n",filename,strerror(errno));
+        snprintf(errbuf,ERRMAX,"Failed to open %s: %s",
+                filename,strerror(errno));
         return(-1);
     }
 
     if ((fptr = (unsigned char *) mmap(NULL,fsize,PROT_READ|PROT_WRITE,
                 MAP_SHARED,fd,offsize)) == MAP_FAILED) {
         (void) close(fd);
-        fprintf(stderr,"Failed to mmap %s: %s\n",filename,strerror(errno));
+        snprintf(errbuf,ERRMAX,"Failed to mmap %s: %s",
+                filename,strerror(errno));
         return(-1);
     }
 
@@ -156,7 +164,7 @@ int fixup(char *filename, int dryrun)
                 this_disk = get2bytes(ptr+4);
                 start_disk = get2bytes(ptr+6);
                 if (this_disk != start_disk) {
-                    fprintf(stderr,"Not start disk\n");
+                    sprintf(errbuf,"Not start disk");
                     res = -1;
                     break;
                 }
@@ -165,6 +173,7 @@ int fixup(char *filename, int dryrun)
                    should be no need to patch the Zip64 EOCDL */
                 cd_offset = get4bytes(ptr+16);
                 if (cd_offset != 0xffffffff) {
+                    sprintf(errbuf,"Offset <4GB");
                     break;
                 }
 
@@ -183,6 +192,8 @@ int fixup(char *filename, int dryrun)
                         *(ptr-4) = 1;
                     }
                     res = 1;
+                } else {
+                    sprintf(errbuf,"Number of disks already 1");
                 }
                 break;
             } else {
@@ -195,6 +206,9 @@ int fixup(char *filename, int dryrun)
         }
     }
     (void) munmap(fptr,fsize);
+    if (ptr == minptr) {
+        sprintf(errbuf,"No Zip64 EOCDL found");
+    }
     return(res);
 }
 
@@ -202,6 +216,7 @@ int main (int argc, char **argv)
 {
     unsigned problems = 0;
     int c,i,err,res,verbose = 0,nopatch=0;
+    char *errmsg;
 
     c = 1;
     little_endian =  *(char *)&c;
@@ -225,7 +240,7 @@ int main (int argc, char **argv)
 
     for (i = optind; i < argc; i++) {
         if (verbose) {
-            printf("Fixing %s...",argv[i]);
+            printf("Fixing %s:...",argv[i]);
         }
         if (access(argv[i],W_OK)) {
             err=errno;
@@ -239,17 +254,20 @@ int main (int argc, char **argv)
             continue;
         }
 
-        if ((res = fixup(argv[i],nopatch)) < 0) {
+        if ((res = fixup(argv[i],&errmsg,nopatch)) < 0) {
             problems++;
         }
 
         if (verbose) {
             if (res == 1) {
-                printf("Succeeded\n");
+                printf("Success!%s\n",nopatch?" (dryrun: no change made)":"");
             } else if (res == 0) {
-                printf("Unnecessary\n");
+                printf("Unnecessary: %s\n",errmsg);
             } else {
                 printf("Failed\n");
+                if (*errmsg) {
+                    fprintf(stderr,"%s\n",errmsg);
+                };
             }
             fflush(stdout);
             fflush(stderr);
@@ -262,4 +280,3 @@ int main (int argc, char **argv)
     }
     exit(0);
 }
-
